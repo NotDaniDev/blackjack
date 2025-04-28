@@ -1,0 +1,322 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blackjack Game</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #1a4731;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        .card {
+            width: 80px;
+            height: 120px;
+            background: white;
+            color: black;
+            border: 1px solid #000;
+            border-radius: 5px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin: 5px;
+            font-size: 1.2em;
+        }
+        .hidden-card {
+            background: url('https://via.placeholder.com/80x120?text=Back') no-repeat center;
+            background-size: cover;
+        }
+        input[type="number"] {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #000;
+            border-radius: 4px;
+            padding: 4px;
+            width: 100px;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen">
+    <h1 class="text-4xl mb-6">Blackjack</h1>
+    <div id="game" class="text-center">
+        <div class="mb-4">
+            <p id="balance" class="text-xl"></p>
+            <div id="bet-section" class="mt-2">
+                <label for="bet-amount" class="mr-2">Bet Amount: $</label>
+                <input type="number" id="bet-amount" min="1" step="1" value="100" class="text-black">
+            </div>
+            <p id="bet" class="text-lg"></p>
+        </div>
+        <div class="mb-8">
+            <h2 class="text-2xl">Dealer's Hand</h2>
+            <div id="dealer-hand" class="flex justify-center"></div>
+            <p id="dealer-score" class="mt-2"></p>
+        </div>
+        <div class="mb-8">
+            <h2 class="text-2xl">Your Hand</h2>
+            <div id="player-hand" class="flex justify-center"></div>
+            <p id="player-score" class="mt-2"></p>
+        </div>
+        <div id="message" class="text-xl mb-4"></div>
+        <div id="controls">
+            <button id="deal" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mr-2">Deal</button>
+            <button id="hit" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded mr-2" disabled>Hit</button>
+            <button id="stand" class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded" disabled>Stand</button>
+        </div>
+    </div>
+
+    <script>
+        const suits = ['♠', '♣', '♥', '♦'];
+        const values = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+        let deck = [];
+        let playerHand = [];
+        let dealerHand = [];
+        let gameActive = false;
+        let balance = 0;
+        let betAmount = 0;
+        const STORAGE_KEY = 'blackjack_game_state';
+
+        const dealButton = document.getElementById('deal');
+        const hitButton = document.getElementById('hit');
+        const standButton = document.getElementById('stand');
+        const messageDiv = document.getElementById('message');
+        const balanceDiv = document.getElementById('balance');
+        const betDiv = document.getElementById('bet');
+        const betInput = document.getElementById('bet-amount');
+
+        // Load game state from localStorage or initialize
+        function loadGameState() {
+            const savedState = localStorage.getItem(STORAGE_KEY);
+            if (savedState) {
+                const state = JSON.parse(savedState);
+                balance = state.balance || 0;
+                if (state.gameOver) {
+                    endGamePermanently();
+                    return false;
+                }
+            } else {
+                balance = 5000; // Starting balance
+                saveGameState();
+            }
+            return true;
+        }
+
+        // Save game state to localStorage
+        function saveGameState(gameOver = false) {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ balance, gameOver }));
+        }
+
+        // Update UI with balance and bet
+        function updateBalanceDisplay() {
+            balanceDiv.textContent = `Balance: $${balance}`;
+            betDiv.textContent = gameActive ? `Current Bet: $${betAmount}` : '';
+        }
+
+        function createDeck() {
+            deck = [];
+            for (let suit of suits) {
+                for (let value of values) {
+                    deck.push({ suit, value });
+                }
+            }
+            shuffle(deck);
+        }
+
+        function shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
+        function getCardValue(card) {
+            if (['J', 'Q', 'K'].includes(card.value)) return 10;
+            if (card.value === 'A') return 11;
+            return parseInt(card.value);
+        }
+
+        function calculateScore(hand) {
+            let score = 0;
+            let aces = 0;
+            for (let card of hand) {
+                if (card.value === 'A') aces++;
+                score += getCardValue(card);
+            }
+            while (score > 21 && aces > 0) {
+                score -= 10;
+                aces--;
+            }
+            return score;
+        }
+
+        function renderHand(hand, elementId, hideFirst = false) {
+            const handDiv = document.getElementById(elementId);
+            handDiv.innerHTML = '';
+            hand.forEach((card, index) => {
+                const cardDiv = document.createElement('div');
+                cardDiv.className = 'card';
+                if (hideFirst && index === 0) {
+                    cardDiv.className += ' hidden-card';
+                } else {
+                    cardDiv.textContent = `${card.value}${card.suit}`;
+                    if (card.suit === '♥' || card.suit === '♦') {
+                        cardDiv.style.color = 'red';
+                    }
+                }
+                handDiv.appendChild(cardDiv);
+            });
+        }
+
+        function updateScores() {
+            const playerScore = calculateScore(playerHand);
+            const dealerScore = calculateScore(dealerHand);
+            document.getElementById('player-score').textContent = `Score: ${playerScore}`;
+            document.getElementById('dealer-score').textContent = gameActive ? 'Score: ?' : `Score: ${dealerScore}`;
+        }
+
+        function startGame() {
+            betAmount = parseInt(betInput.value);
+            if (isNaN(betAmount) || betAmount < 1) {
+                messageDiv.textContent = 'Please enter a valid bet amount (at least $1).';
+                return;
+            }
+            if (betAmount > balance) {
+                messageDiv.textContent = 'Bet amount cannot exceed your balance!';
+                return;
+            }
+            balance -= betAmount; // Deduct bet
+            saveGameState();
+            updateBalanceDisplay();
+            createDeck();
+            playerHand = [deck.pop(), deck.pop()];
+            dealerHand = [deck.pop(), deck.pop()];
+            gameActive = true;
+            dealButton.disabled = true;
+            hitButton.disabled = false;
+            standButton.disabled = false;
+            messageDiv.textContent = 'Hit or Stand?';
+            renderHand(playerHand, 'player-hand');
+            renderHand(dealerHand, 'dealer-hand', true);
+            updateScores();
+            if (calculateScore(playerHand) === 21) {
+                endGame('Blackjack! You win!', true);
+            }
+        }
+
+        function hit() {
+            playerHand.push(deck.pop());
+            renderHand(playerHand, 'player-hand');
+            updateScores();
+            const playerScore = calculateScore(playerHand);
+            if (playerScore > 21) {
+                endGame('Bust! Dealer wins.', false);
+            }
+        }
+
+        function stand() {
+            gameActive = false;
+            renderHand(dealerHand, 'dealer-hand', false);
+            let dealerScore = calculateScore(dealerHand);
+            while (dealerScore < 17) {
+                dealerHand.push(deck.pop());
+                renderHand(dealerHand, 'dealer-hand', false);
+                dealerScore = calculateScore(dealerHand);
+            }
+            updateScores();
+            const playerScore = calculateScore(playerHand);
+            if (dealerScore > 21) {
+                endGame('Dealer busts! You win!', true);
+            } else if (dealerScore > playerScore) {
+                endGame('Dealer wins.', false);
+            } else if (playerScore > dealerScore) {
+                endGame('You win!', true);
+            } else {
+                endGame('Push (tie).', null);
+            }
+        }
+
+        function endGame(message, playerWon) {
+            gameActive = false;
+            messageDiv.textContent = message;
+            dealButton.disabled = false;
+            hitButton.disabled = true;
+            standButton.disabled = true;
+            if (playerWon === true) {
+                balance += betAmount * 2; // Return bet + win
+            } else if (playerWon === null) {
+                balance += betAmount; // Return bet for push
+            }
+            saveGameState();
+            updateBalanceDisplay();
+            if (balance < 1) {
+                endGamePermanently();
+            }
+        }
+
+        function endGamePermanently() {
+            gameActive = false;
+            balance = 0;
+            saveGameState(true);
+            messageDiv.textContent = 'Game Over: You have no money left!';
+            dealButton.disabled = true;
+            hitButton.disabled = true;
+            standButton.disabled = true;
+            betInput.disabled = true;
+            updateBalanceDisplay();
+            document.getElementById('player-hand').innerHTML = '';
+            document.getElementById('dealer-hand').innerHTML = '';
+            document.getElementById('player-score').textContent = '';
+            document.getElementById('dealer-score').textContent = '';
+        }
+
+        // Initialize game
+        if (loadGameState()) {
+            updateBalanceDisplay();
+            dealButton.addEventListener('click', startGame);
+            hitButton.addEventListener('click', hit);
+            standButton.addEventListener('click', stand);
+        }
+    </script>
+</body>
+</html>
